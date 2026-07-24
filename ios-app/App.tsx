@@ -1,6 +1,9 @@
 import { StatusBar } from 'expo-status-bar';
+import * as SecureStore from 'expo-secure-store';
 import {
+  ActivityIndicator,
   Linking,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -8,13 +11,17 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   useColorScheme,
   View,
 } from 'react-native';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 type Tab = 'today' | 'saved' | 'history' | 'settings';
 type ThemeMode = 'system' | 'light' | 'dark';
+type ApiOperationState = 'idle' | 'saving' | 'saved' | 'testing' | 'success' | 'error';
+
+const DEEPSEEK_KEY_STORE = 'deepseek_api_key';
 
 type Article = {
   id: string;
@@ -155,6 +162,9 @@ function App() {
   const [savedIds, setSavedIds] = useState<string[]>([]);
   const [readIds, setReadIds] = useState<string[]>([]);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
+  const [apiOperation, setApiOperation] = useState<ApiOperationState>('idle');
+  const [apiMessage, setApiMessage] = useState('尚未配置 DeepSeek API Key');
 
   const isDark = themeMode === 'dark' || (themeMode === 'system' && systemScheme === 'dark');
   const colors = isDark ? palette.dark : palette.light;
@@ -162,6 +172,31 @@ function App() {
     () => articles.filter((article) => savedIds.includes(article.id)),
     [savedIds],
   );
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      setApiMessage('请在 iPhone 安装版中保存 API Key');
+      return;
+    }
+
+    let active = true;
+    SecureStore.getItemAsync(DEEPSEEK_KEY_STORE)
+      .then((storedKey) => {
+        if (!active) return;
+        const configured = Boolean(storedKey);
+        setApiKeyConfigured(configured);
+        setApiMessage(configured ? 'API Key 已安全保存在本机' : '尚未配置 DeepSeek API Key');
+      })
+      .catch(() => {
+        if (!active) return;
+        setApiOperation('error');
+        setApiMessage('读取本机 API Key 失败');
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const toggleSaved = (articleId: string) => {
     setSavedIds((current) =>
@@ -181,6 +216,104 @@ function App() {
       title: article.title,
       message: `${article.title}\n${article.translation ?? ''}\n\n${article.summary}\n\n${article.url}`,
     });
+  };
+
+  const saveDeepSeekApiKey = async (apiKey: string) => {
+    const normalizedKey = apiKey.trim();
+    if (!normalizedKey.startsWith('sk-') || normalizedKey.length < 20) {
+      setApiOperation('error');
+      setApiMessage('Key 格式不正确，应以 sk- 开头');
+      return false;
+    }
+    if (Platform.OS === 'web') {
+      setApiOperation('error');
+      setApiMessage('Web 预览不会保存密钥，请在 iPhone 安装版中操作');
+      return false;
+    }
+
+    setApiOperation('saving');
+    setApiMessage('正在安全保存…');
+    try {
+      await SecureStore.setItemAsync(DEEPSEEK_KEY_STORE, normalizedKey, {
+        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+      });
+      setApiKeyConfigured(true);
+      setApiOperation('saved');
+      setApiMessage('API Key 已保存到 iPhone 钥匙串');
+      return true;
+    } catch {
+      setApiOperation('error');
+      setApiMessage('保存失败，请稍后重试');
+      return false;
+    }
+  };
+
+  const deleteDeepSeekApiKey = async () => {
+    if (Platform.OS === 'web') {
+      setApiOperation('error');
+      setApiMessage('Web 预览中没有保存 API Key');
+      return;
+    }
+
+    try {
+      await SecureStore.deleteItemAsync(DEEPSEEK_KEY_STORE);
+      setApiKeyConfigured(false);
+      setApiOperation('idle');
+      setApiMessage('API Key 已从本机删除');
+    } catch {
+      setApiOperation('error');
+      setApiMessage('删除失败，请稍后重试');
+    }
+  };
+
+  const testDeepSeekConnection = async () => {
+    if (Platform.OS === 'web') {
+      setApiOperation('error');
+      setApiMessage('请在 iPhone 安装版中测试连接');
+      return;
+    }
+
+    const storedKey = await SecureStore.getItemAsync(DEEPSEEK_KEY_STORE);
+    if (!storedKey) {
+      setApiKeyConfigured(false);
+      setApiOperation('error');
+      setApiMessage('请先保存 API Key');
+      return;
+    }
+
+    setApiOperation('testing');
+    setApiMessage('正在连接 DeepSeek…');
+    try {
+      const response = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${storedKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'deepseek-v4-pro',
+          messages: [{ role: 'user', content: '请只回复 OK' }],
+          max_tokens: 8,
+          thinking: { type: 'disabled' },
+        }),
+      });
+      const payload = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+        error?: { message?: string };
+      };
+
+      if (!response.ok) {
+        setApiOperation('error');
+        setApiMessage(`连接失败（${response.status}）：${payload.error?.message ?? '请检查 Key'}`);
+        return;
+      }
+
+      setApiOperation('success');
+      setApiMessage(`连接成功 · ${payload.choices?.[0]?.message?.content?.trim() || 'DeepSeek 已响应'}`);
+    } catch (error) {
+      setApiOperation('error');
+      setApiMessage(`连接失败：${error instanceof Error ? error.message : '网络异常'}`);
+    }
   };
 
   if (selectedArticle) {
@@ -231,8 +364,14 @@ function App() {
             isDark={isDark}
             mode={themeMode}
             notificationsEnabled={notificationsEnabled}
+            apiKeyConfigured={apiKeyConfigured}
+            apiOperation={apiOperation}
+            apiMessage={apiMessage}
             onChangeMode={setThemeMode}
             onChangeNotifications={setNotificationsEnabled}
+            onSaveApiKey={saveDeepSeekApiKey}
+            onDeleteApiKey={deleteDeepSeekApiKey}
+            onTestApiKey={testDeepSeekConnection}
           />
         )}
       </View>
@@ -704,16 +843,40 @@ function SettingsScreen({
   isDark,
   mode,
   notificationsEnabled,
+  apiKeyConfigured,
+  apiOperation,
+  apiMessage,
   onChangeMode,
   onChangeNotifications,
+  onSaveApiKey,
+  onDeleteApiKey,
+  onTestApiKey,
 }: {
   colors: Colors;
   isDark: boolean;
   mode: ThemeMode;
   notificationsEnabled: boolean;
+  apiKeyConfigured: boolean;
+  apiOperation: ApiOperationState;
+  apiMessage: string;
   onChangeMode: (mode: ThemeMode) => void;
   onChangeNotifications: (enabled: boolean) => void;
+  onSaveApiKey: (apiKey: string) => Promise<boolean>;
+  onDeleteApiKey: () => Promise<void>;
+  onTestApiKey: () => Promise<void>;
 }) {
+  const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
+  const apiBusy = apiOperation === 'saving' || apiOperation === 'testing';
+
+  const saveKey = async () => {
+    const saved = await onSaveApiKey(apiKeyDraft);
+    if (saved) {
+      setApiKeyDraft('');
+      setApiKeyVisible(false);
+    }
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <Masthead colors={colors} eyebrow="PREFERENCES" />
@@ -752,6 +915,108 @@ function SettingsScreen({
           colors={colors}
           hideDivider
         />
+      </SettingsGroup>
+
+      <SettingsGroup label="AI 服务" colors={colors}>
+        <View style={[styles.apiStatusRow, { borderBottomColor: colors.border }]}>
+          <View style={styles.apiStatusText}>
+            <View style={styles.apiStatusTitleRow}>
+              <View
+                style={[
+                  styles.apiStatusDot,
+                  { backgroundColor: apiKeyConfigured ? '#3B8D62' : colors.textMuted },
+                ]}
+              />
+              <Text style={[styles.settingsLabel, { color: colors.text }]}>
+                DeepSeek V4 Pro
+              </Text>
+            </View>
+            <Text
+              style={[
+                styles.settingsDescription,
+                { color: apiOperation === 'error' ? colors.accent : colors.textMuted },
+              ]}
+            >
+              {apiMessage}
+            </Text>
+          </View>
+          {apiBusy && <ActivityIndicator color={colors.accent} size="small" />}
+        </View>
+
+        <View style={styles.apiForm}>
+          <Text style={[styles.apiHelp, { color: colors.textMuted }]}>
+            Key 只保存在当前 iPhone 钥匙串，不会上传到 GitHub。
+          </Text>
+          <View style={[styles.apiInputWrap, { borderColor: colors.border }]}>
+            <TextInput
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!apiBusy}
+              onChangeText={setApiKeyDraft}
+              placeholder={apiKeyConfigured ? '输入新 Key 可覆盖当前配置' : '输入 sk- 开头的 API Key'}
+              placeholderTextColor={colors.textMuted}
+              secureTextEntry={!apiKeyVisible}
+              selectionColor={colors.accent}
+              style={[styles.apiInput, { color: colors.text }]}
+              value={apiKeyDraft}
+            />
+            <Pressable
+              accessibilityLabel={apiKeyVisible ? '隐藏 API Key' : '显示 API Key'}
+              disabled={!apiKeyDraft}
+              hitSlop={8}
+              onPress={() => setApiKeyVisible((visible) => !visible)}
+            >
+              <Text
+                style={[
+                  styles.apiVisibility,
+                  { color: apiKeyDraft ? colors.accent : colors.textMuted },
+                ]}
+              >
+                {apiKeyVisible ? '隐藏' : '显示'}
+              </Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.apiButtonRow}>
+            <Pressable
+              disabled={apiBusy || !apiKeyDraft.trim()}
+              onPress={saveKey}
+              style={[
+                styles.apiPrimaryButton,
+                { backgroundColor: colors.text },
+                (apiBusy || !apiKeyDraft.trim()) && styles.disabledButton,
+              ]}
+            >
+              <Text style={[styles.apiPrimaryButtonText, { color: colors.background }]}>
+                保存 Key
+              </Text>
+            </Pressable>
+            <Pressable
+              disabled={apiBusy || !apiKeyConfigured}
+              onPress={onTestApiKey}
+              style={[
+                styles.apiSecondaryButton,
+                { borderColor: colors.border },
+                (apiBusy || !apiKeyConfigured) && styles.disabledButton,
+              ]}
+            >
+              <Text style={[styles.apiSecondaryButtonText, { color: colors.text }]}>
+                测试连接
+              </Text>
+            </Pressable>
+          </View>
+
+          {apiKeyConfigured && (
+            <Pressable disabled={apiBusy} hitSlop={8} onPress={onDeleteApiKey}>
+              <Text style={[styles.apiDeleteText, { color: colors.accent }]}>
+                删除本机 API Key
+              </Text>
+            </Pressable>
+          )}
+          <Text style={[styles.apiCostNote, { color: colors.textMuted }]}>
+            “测试连接”会向 DeepSeek 发送一个极短请求，并产生少量用量。
+          </Text>
+        </View>
       </SettingsGroup>
 
       <SettingsGroup label="提醒" colors={colors}>
@@ -994,6 +1259,37 @@ const styles = StyleSheet.create({
   settingsLabel: { fontSize: 13, fontWeight: '600' },
   settingsDescription: { fontSize: 11, marginTop: 3 },
   settingsValue: { fontSize: 12 },
+  apiStatusRow: {
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 60,
+    paddingVertical: 11,
+  },
+  apiStatusText: { flex: 1, paddingRight: 12 },
+  apiStatusTitleRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  apiStatusDot: { borderRadius: 4, height: 8, width: 8 },
+  apiForm: { paddingBottom: 15, paddingTop: 13 },
+  apiHelp: { fontSize: 11, lineHeight: 17 },
+  apiInputWrap: {
+    alignItems: 'center',
+    borderWidth: 1,
+    flexDirection: 'row',
+    marginTop: 11,
+    minHeight: 48,
+    paddingHorizontal: 12,
+  },
+  apiInput: { flex: 1, fontSize: 13, paddingRight: 10, paddingVertical: 11 },
+  apiVisibility: { fontSize: 11, fontWeight: '800' },
+  apiButtonRow: { flexDirection: 'row', gap: 9, marginTop: 10 },
+  apiPrimaryButton: { alignItems: 'center', flex: 1, paddingVertical: 12 },
+  apiPrimaryButtonText: { fontSize: 12, fontWeight: '800' },
+  apiSecondaryButton: { alignItems: 'center', borderWidth: 1, flex: 1, paddingVertical: 11 },
+  apiSecondaryButtonText: { fontSize: 12, fontWeight: '800' },
+  disabledButton: { opacity: 0.4 },
+  apiDeleteText: { fontSize: 11, fontWeight: '700', marginTop: 13, textAlign: 'center' },
+  apiCostNote: { fontSize: 10, lineHeight: 15, marginTop: 10 },
   settingsFootnote: { borderTopWidth: 1, marginTop: 30, paddingTop: 14 },
   settingsFootnoteText: { fontFamily: 'Georgia', fontSize: 12, textAlign: 'center' },
 });

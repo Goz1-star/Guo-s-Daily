@@ -20,9 +20,13 @@ npm start
 - 分享原文与摘要
 - 阅读状态、收藏状态
 - 跟随系统、浅色、深色三种外观
+- DeepSeek API Key 本机安全存储、删除和连接测试
 - 目前使用演示新闻数据，下一阶段接入统一新闻数据接口
+
+## DeepSeek API Key
+
+在 iPhone 安装版中打开“设置 → AI 服务”，输入新的 DeepSeek API Key 后点击“保存 Key”。Key 使用 iOS Keychain 保存在本机，不写入源码或 GitHub。点击“测试连接”会发送一个极短请求并产生少量 API 用量。
 
 ## 构建策略
 
 当前项目不依赖 App Store 发布。后续会在 GitHub Actions 的 macOS runner 上生成 iOS 构建产物，再在 Windows 使用 Sideloadly 安装到个人 iPhone。
-
