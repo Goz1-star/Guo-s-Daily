@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="paper">#FAFAF7</color>
+    <color name="ink">#121212</color>
+    <color name="night_paper">#111315</color>
+    <color name="night_ink">#F3F0E8</color>
+    <color name="navy">#142238</color>
+    <color name="gold">#B69355</color>
+</resources>
