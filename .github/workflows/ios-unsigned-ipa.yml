@@ -13,10 +13,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -28,7 +28,7 @@ jobs:
 
       - name: Generate native iOS project
         working-directory: ios-app
-        run: npx expo prebuild --platform ios --no-install --non-interactive
+        run: npx expo prebuild --platform ios --non-interactive
 
       - name: Build unsigned iPhone app
         working-directory: ios-app
@@ -75,4 +75,3 @@ jobs:
           path: ios-app/GuoDaily-ios-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
-
