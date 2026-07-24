@@ -1,0 +1,78 @@
+name: Build iOS IPA for Sideloadly
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ios-app/**"
+      - ".github/workflows/ios-unsigned-ipa.yml"
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ios-app/package-lock.json
+
+      - name: Install JavaScript dependencies
+        working-directory: ios-app
+        run: npm ci
+
+      - name: Generate native iOS project
+        working-directory: ios-app
+        run: npx expo prebuild --platform ios --no-install --non-interactive
+
+      - name: Build unsigned iPhone app
+        working-directory: ios-app
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          workspace="$(find ios -maxdepth 1 -name '*.xcworkspace' -print -quit)"
+          if [[ -z "${workspace}" ]]; then
+            echo "No Xcode workspace was generated."
+            exit 1
+          fi
+
+          scheme="$(xcodebuild -list -workspace "${workspace}" | awk '/Schemes:/{getline; print $1; exit}')"
+          if [[ -z "${scheme}" ]]; then
+            echo "No Xcode scheme was found."
+            exit 1
+          fi
+
+          xcodebuild \
+            -workspace "${workspace}" \
+            -scheme "${scheme}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+          app_path="build/Build/Products/Release-iphoneos/${scheme}.app"
+          if [[ ! -d "${app_path}" ]]; then
+            echo "Built .app was not found at ${app_path}"
+            exit 1
+          fi
+
+          rm -rf Payload
+          mkdir Payload
+          cp -R "${app_path}" Payload/
+          ditto -c -k --sequesterRsrc --keepParent Payload GuoDaily-ios-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guo-daily-ios-unsigned
+          path: ios-app/GuoDaily-ios-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+
