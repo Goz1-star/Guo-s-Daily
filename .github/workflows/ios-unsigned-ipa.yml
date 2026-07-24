@@ -48,6 +48,7 @@ jobs:
             exit 1
           fi
 
+          set +e
           xcodebuild \
             -workspace "${workspace}" \
             -scheme "${scheme}" \
@@ -55,11 +56,19 @@ jobs:
             -sdk iphoneos \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGNING_REQUIRED=NO | tee xcodebuild.log
+          build_status="${PIPESTATUS[0]}"
+          set -e
 
-          app_path="build/Build/Products/Release-iphoneos/${scheme}.app"
-          if [[ ! -d "${app_path}" ]]; then
-            echo "Built .app was not found at ${app_path}"
+          if [[ "${build_status}" -ne 0 ]]; then
+            error_summary="$(grep -E '(^|[[:space:]])(error:|fatal error:)' xcodebuild.log | tail -n 8 | tr '\n' ' ')"
+            echo "::error title=Xcode build failed::${error_summary:-See xcodebuild.log artifact for details.}"
+            exit "${build_status}"
+          fi
+
+          app_path="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "${app_path}" ]]; then
+            echo "::error title=Missing iOS app::No .app bundle was found after a successful Xcode build."
             exit 1
           fi
 
@@ -67,6 +76,15 @@ jobs:
           mkdir Payload
           cp -R "${app_path}" Payload/
           ditto -c -k --sequesterRsrc --keepParent Payload GuoDaily-ios-unsigned.ipa
+
+      - name: Upload Xcode build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guo-daily-ios-build-log
+          path: ios-app/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
