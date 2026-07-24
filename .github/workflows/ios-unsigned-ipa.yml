@@ -42,11 +42,13 @@ jobs:
             exit 1
           fi
 
-          scheme="$(xcodebuild -list -workspace "${workspace}" | awk '/Schemes:/{getline; print $1; exit}')"
-          if [[ -z "${scheme}" ]]; then
-            echo "No Xcode scheme was found."
+          scheme_file="$(find ios -path '*/xcshareddata/xcschemes/*.xcscheme' -not -path '*/Pods/*' -print -quit)"
+          if [[ -z "${scheme_file}" ]]; then
+            echo "No application Xcode scheme was found."
             exit 1
           fi
+          scheme="$(basename "${scheme_file}" .xcscheme)"
+          echo "Using application scheme: ${scheme}"
 
           set +e
           xcodebuild \
@@ -66,7 +68,7 @@ jobs:
             exit "${build_status}"
           fi
 
-          app_path="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -type d -name '*.app' -print -quit)"
+          app_path="$(find build/Build/Products -type d -name '*.app' -print -quit)"
           if [[ -z "${app_path}" ]]; then
             echo "::error title=Missing iOS app::No .app bundle was found after a successful Xcode build."
             exit 1
@@ -79,7 +81,7 @@ jobs:
 
       - name: Upload Xcode build log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: guo-daily-ios-build-log
           path: ios-app/xcodebuild.log
@@ -87,7 +89,7 @@ jobs:
           retention-days: 7
 
       - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: guo-daily-ios-unsigned
           path: ios-app/GuoDaily-ios-unsigned.ipa
