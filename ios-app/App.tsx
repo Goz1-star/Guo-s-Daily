@@ -1,5 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ActivityIndicator,
   Linking,
@@ -15,32 +16,20 @@ import {
   useColorScheme,
   View,
 } from 'react-native';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { fetchLatestNews, type NewsArticle } from './src/newsService';
 
 type Tab = 'today' | 'saved' | 'history' | 'settings';
 type ThemeMode = 'system' | 'light' | 'dark';
 type ApiOperationState = 'idle' | 'saving' | 'saved' | 'testing' | 'success' | 'error';
 
 const DEEPSEEK_KEY_STORE = 'deepseek_api_key';
+const NEWS_CACHE_STORE = 'guo_daily_latest_news';
+const NEWS_CACHE_TIME_STORE = 'guo_daily_latest_news_time';
 
-type Article = {
-  id: string;
-  category: 'AI' | '科技';
-  region: '国内' | '国际';
-  source: string;
-  sourceLabel: string;
-  publishedAt: string;
-  title: string;
-  translation?: string;
-  summary: string;
-  reason: string;
-  impact: number;
-  heat: number;
-  url: string;
-  isBrief?: boolean;
-};
+type Article = NewsArticle;
 
-const articles: Article[] = [
+const demoArticles: Article[] = [
   {
     id: 'openai-agents',
     category: 'AI',
@@ -154,6 +143,15 @@ function todayLabel() {
   return `${now.getMonth() + 1}月${now.getDate()}日 · 07:30`;
 }
 
+function feedTimeLabel(value: string | null) {
+  if (!value) return '等待首次联网更新';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '已读取最新数据';
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, '0')}:${String(
+    date.getMinutes(),
+  ).padStart(2, '0')} 更新`;
+}
+
 function App() {
   const systemScheme = useColorScheme();
   const [tab, setTab] = useState<Tab>('today');
@@ -165,13 +163,61 @@ function App() {
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [apiOperation, setApiOperation] = useState<ApiOperationState>('idle');
   const [apiMessage, setApiMessage] = useState('尚未配置 DeepSeek API Key');
+  const [newsArticles, setNewsArticles] = useState<Article[]>(demoArticles);
+  const [newsRefreshing, setNewsRefreshing] = useState(true);
+  const [newsError, setNewsError] = useState<string | null>(null);
+  const [newsGeneratedAt, setNewsGeneratedAt] = useState<string | null>(null);
 
   const isDark = themeMode === 'dark' || (themeMode === 'system' && systemScheme === 'dark');
   const colors = isDark ? palette.dark : palette.light;
   const savedArticles = useMemo(
-    () => articles.filter((article) => savedIds.includes(article.id)),
-    [savedIds],
+    () => newsArticles.filter((article) => savedIds.includes(article.id)),
+    [newsArticles, savedIds],
   );
+
+  const refreshNews = useCallback(async () => {
+    setNewsRefreshing(true);
+    setNewsError(null);
+    try {
+      const latest = await fetchLatestNews();
+      setNewsArticles(latest.articles);
+      setNewsGeneratedAt(latest.generatedAt);
+      await AsyncStorage.multiSet([
+        [NEWS_CACHE_STORE, JSON.stringify(latest.articles)],
+        [NEWS_CACHE_TIME_STORE, latest.generatedAt],
+      ]);
+    } catch (error) {
+      setNewsError(error instanceof Error ? error.message : '网络异常，请稍后重试');
+    } finally {
+      setNewsRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    AsyncStorage.multiGet([NEWS_CACHE_STORE, NEWS_CACHE_TIME_STORE])
+      .then((entries) => {
+        if (!active) return;
+        const cachedNews = entries[0]?.[1];
+        const cachedTime = entries[1]?.[1];
+        if (cachedNews) {
+          const parsed = JSON.parse(cachedNews) as Article[];
+          if (Array.isArray(parsed) && parsed.length > 0) setNewsArticles(parsed);
+        }
+        if (cachedTime) setNewsGeneratedAt(cachedTime);
+      })
+      .catch(() => {
+        // 缓存不可用不妨碍联网刷新。
+      })
+      .finally(() => {
+        if (active) void refreshNews();
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [refreshNews]);
 
   useEffect(() => {
     if (Platform.OS === 'web') {
@@ -336,11 +382,15 @@ function App() {
       <View style={styles.appFrame}>
         {tab === 'today' && (
           <TodayScreen
-            articles={articles}
+            articles={newsArticles}
             colors={colors}
             isDark={isDark}
             readIds={readIds}
             savedIds={savedIds}
+            refreshing={newsRefreshing}
+            errorMessage={newsError}
+            generatedAt={newsGeneratedAt}
+            onRefresh={refreshNews}
             onOpenArticle={openArticle}
             onShare={shareArticle}
             onToggleSaved={toggleSaved}
@@ -356,7 +406,12 @@ function App() {
           />
         )}
         {tab === 'history' && (
-          <HistoryScreen colors={colors} isDark={isDark} onOpenArticle={openArticle} />
+          <HistoryScreen
+            articles={newsArticles}
+            colors={colors}
+            isDark={isDark}
+            onOpenArticle={openArticle}
+          />
         )}
         {tab === 'settings' && (
           <SettingsScreen
@@ -405,6 +460,10 @@ function TodayScreen({
   isDark,
   savedIds,
   readIds,
+  refreshing,
+  errorMessage,
+  generatedAt,
+  onRefresh,
   onOpenArticle,
   onShare,
   onToggleSaved,
@@ -414,18 +473,16 @@ function TodayScreen({
   isDark: boolean;
   savedIds: string[];
   readIds: string[];
+  refreshing: boolean;
+  errorMessage: string | null;
+  generatedAt: string | null;
+  onRefresh: () => void;
   onOpenArticle: (article: Article) => void;
   onShare: (article: Article) => void;
   onToggleSaved: (articleId: string) => void;
 }) {
-  const [refreshing, setRefreshing] = useState(false);
   const lead = storyList[0];
   const remaining = storyList.slice(1);
-
-  const simulateRefresh = () => {
-    setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 650);
-  };
 
   return (
     <ScrollView
@@ -442,9 +499,11 @@ function TodayScreen({
         <Pressable
           accessibilityLabel="刷新日报"
           accessibilityRole="button"
-          onPress={simulateRefresh}
+          disabled={refreshing}
+          onPress={onRefresh}
           style={({ pressed }) => [styles.refreshButton, pressed && styles.pressed]}
         >
+          {refreshing && <ActivityIndicator color={colors.accent} size="small" />}
           <Text style={[styles.refreshText, { color: colors.accent }]}>
             {refreshing ? '更新中' : '刷新'}
           </Text>
@@ -453,9 +512,24 @@ function TodayScreen({
 
       <View style={[styles.editionNote, { backgroundColor: colors.surfaceMuted }]}>
         <Text style={[styles.editionNoteText, { color: colors.textMuted }]}>
-          每天 07:30 · AI 与科技 · 影响力优先 · {storyList.length} 条入选
+          {feedTimeLabel(generatedAt)} · AI 与科技 · 影响力优先 · {storyList.length} 条入选
         </Text>
       </View>
+
+      {errorMessage && (
+        <View
+          accessibilityRole="alert"
+          style={[
+            styles.newsErrorBanner,
+            { backgroundColor: colors.accentSoft, borderColor: colors.accent },
+          ]}
+        >
+          <Text style={[styles.newsErrorTitle, { color: colors.text }]}>暂时无法取得最新资讯</Text>
+          <Text style={[styles.newsErrorBody, { color: colors.textMuted }]}>
+            {errorMessage}。已保留上次成功内容，你可以稍后再次刷新。
+          </Text>
+        </View>
+      )}
 
       {lead && (
         <LeadCard
@@ -797,10 +871,12 @@ function SavedScreen({
 }
 
 function HistoryScreen({
+  articles: historyArticles,
   colors,
   isDark: _isDark,
   onOpenArticle,
 }: {
+  articles: Article[];
   colors: Colors;
   isDark: boolean;
   onOpenArticle: (article: Article) => void;
@@ -813,7 +889,8 @@ function HistoryScreen({
         收藏内容不会被清理，未收藏日报保留最近 30 天。
       </Text>
       <Pressable
-        onPress={() => onOpenArticle(articles[0])}
+        disabled={historyArticles.length === 0}
+        onPress={() => historyArticles[0] && onOpenArticle(historyArticles[0])}
         style={({ pressed }) => [
           styles.digestRow,
           { backgroundColor: colors.surface, borderColor: colors.border },
@@ -823,7 +900,7 @@ function HistoryScreen({
         <View>
           <Text style={[styles.digestDate, { color: colors.text }]}>今天 · 07:30</Text>
           <Text style={[styles.digestMeta, { color: colors.textMuted }]}>
-            {articles.length} 条内容 · AI 与科技
+            {historyArticles.length} 条内容 · AI 与科技
           </Text>
         </View>
         <Text style={[styles.digestArrow, { color: colors.accent }]}>›</Text>
@@ -1166,11 +1243,14 @@ const styles = StyleSheet.create({
   sectionIntro: { alignItems: 'flex-end', flexDirection: 'row', justifyContent: 'space-between', paddingTop: 26 },
   sectionKicker: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2, marginBottom: 5 },
   sectionTitle: { fontFamily: 'Georgia', fontSize: 27, fontWeight: '700', letterSpacing: -0.4 },
-  refreshButton: { padding: 8 },
+  refreshButton: { alignItems: 'center', flexDirection: 'row', gap: 6, padding: 8 },
   refreshText: { fontSize: 13, fontWeight: '700' },
   pressed: { opacity: 0.58 },
   editionNote: { marginTop: 16, paddingHorizontal: 12, paddingVertical: 9 },
   editionNoteText: { fontSize: 11, fontWeight: '600', letterSpacing: 0.1 },
+  newsErrorBanner: { borderLeftWidth: 3, marginTop: 12, paddingHorizontal: 12, paddingVertical: 10 },
+  newsErrorTitle: { fontSize: 12, fontWeight: '800' },
+  newsErrorBody: { fontSize: 11, lineHeight: 17, marginTop: 3 },
   leadCard: { borderWidth: 1, marginTop: 18, padding: 16 },
   cardMetaRow: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
   metaLeft: { alignItems: 'center', flexDirection: 'row', gap: 10 },
