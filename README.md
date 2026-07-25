@@ -73,6 +73,42 @@ IPA 构建产物保留 14 天。如果页面中已经没有可下载的产物，
 
 更多问题可查看 [Sideloadly FAQ](https://sideloadly.io/faq) 和 [Apple 开发者模式说明](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device)。
 
+## Android 下载与安装
+
+Android 测试版最低支持 Android 8.0（API 26），无需登录账号或连接电脑即可安装。
+
+### 1. 下载 APK
+
+1. 在 Android 手机上点击[下载 Guo 的日报 0.1.0 测试版 APK](https://github.com/Goz1-star/Guo-s-Daily/raw/refs/heads/main/Guo%E7%9A%84%E6%97%A5%E6%8A%A5-0.1.0-%E6%B5%8B%E8%AF%95%E7%89%88.apk)。
+2. 浏览器出现下载确认时选择“仍要下载”或“下载”。
+3. 下载完成后，从浏览器下载列表或系统“文件管理 → 下载”中打开 APK。
+
+### 2. 安装到 Android 手机
+
+1. 如果系统阻止安装，请按提示进入“设置 → 安装未知应用”。
+2. 找到刚才用于下载或打开 APK 的浏览器、文件管理器，开启“允许来自此来源的应用”。
+3. 返回安装界面，点击“安装”并等待完成。
+4. 如果 Google Play 保护提示扫描，可以先完成扫描，再确认安装这个自用测试版本。
+5. 安装完成后，建议关闭刚才开启的“允许来自此来源的应用”权限。
+
+不同品牌手机的菜单名称可能略有差异，可在系统设置中搜索“安装未知应用”。从 Google Play 以外安装应用存在安全风险，请只使用本仓库提供的 APK；可参阅 [Google 的 Android 安装安全说明](https://support.google.com/android/answer/9457058)。
+
+### 3. 安装到 Android 模拟器
+
+启动 Android Studio 模拟器后，可以直接把 APK 文件拖入模拟器窗口安装；也可以在已连接模拟器的情况下执行：
+
+```powershell
+adb install -r ".\Guo的日报-0.1.0-测试版.apk"
+```
+
+其中 `-r` 表示保留应用数据并覆盖安装已有版本。
+
+### 4. 更新软件
+
+- 下载新版 APK 后直接打开并覆盖安装，不要先卸载旧版。
+- 覆盖安装可以保留收藏、历史记录和设置，但新版 APK 必须使用与旧版相同的签名。
+- 如果系统提示“软件包与现有软件包冲突”，说明签名不一致；卸载旧版可以解决，但会清除应用本机数据。
+
 ## Android 构建
 
 ```powershell
